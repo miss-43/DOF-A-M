@@ -1,0 +1,100 @@
+@startuml rel_mod
+!define BLOB BLOB
+
+entity PERSON {
+  *id : INTEGER <<PK>>
+  --
+  *name : TEXT
+  *password_hash : TEXT
+  face_png : BLOB
+  *role_id : INTEGER <<FK>>
+  *dept_id : INTEGER <<FK>>
+  created_at : DATETIME
+}
+
+entity ROLE {
+  *id : INTEGER <<PK>>
+  --
+  *name : TEXT UNIQUE            // admin / employee
+  created_at : DATETIME
+}
+
+entity DEPT {
+  *id : INTEGER <<PK>>
+  --
+  *name : TEXT UNIQUE            // 研发部/财务部
+  created_at : DATETIME
+}
+
+entity SHIFT {
+  *id : INTEGER <<PK>>
+  --
+  *name : TEXT                   // 时段一 / 时段二 / 加班
+  start_time : TIME
+  end_time : TIME
+  grace_min : INTEGER
+  created_at : DATETIME
+}
+
+entity WEEK_SHIFT {
+  *id : INTEGER <<PK>>
+  --
+  *dept_id : INTEGER <<FK>>      // → DEPT.id
+  *shift_id : INTEGER <<FK>>     // → SHIFT.id
+  *week_day : INTEGER            // 0=周一 … 6=周日
+  created_at : DATETIME
+}
+
+entity CHECK_IN {
+  *id : INTEGER <<PK>>
+  --
+  *person_id : INTEGER <<FK>>    // → PERSON.id
+  *shift_id : INTEGER <<FK>>     // → SHIFT.id
+  clock_time : DATETIME         // 实际打卡时间
+  confidence : REAL
+  snapshot_png : BLOB
+  rule_result : TEXT
+  created_at : DATETIME
+}
+
+entity RULE {
+  *id : INTEGER <<PK>>          // 全局仅 1 行
+  --
+  late_min : INTEGER
+  early_min : INTEGER
+  max_retry : INTEGER
+  updated_at : DATETIME
+}
+
+entity LBPH_MODEL {
+  *id : INTEGER <<PK>>          // 全局仅 1 行
+  --
+  grid_x : INTEGER
+  grid_y : INTEGER
+  radius : INTEGER
+  neighbors : INTEGER
+  threshold : REAL
+  xml_blob : BLOB
+  updated_at : DATETIME
+}
+
+entity RECOGNITION_LOG {
+  *id : INTEGER <<PK>>
+  --
+  *person_id : INTEGER <<FK>>
+  confidence : REAL
+  snapshot_png : BLOB
+  created_at : DATETIME
+}
+
+PERSON ||--o{ CHECK_IN : "打卡"
+PERSON ||--o{ RECOGNITION_LOG : "识别流水"
+PERSON ||--o{ ROLE : "拥有角色"
+PERSON ||--o{ DEPT : "所属部门"
+DEPT ||--o{ WEEK_SHIFT : "部门排班"
+WEEK_SHIFT ||--o{ CHECK_IN : "所属排班"
+SHIFT ||--o{ WEEK_SHIFT : "排班时段"
+SHIFT ||--o{ CHECK_IN : "所属时段"
+RULE ||--|| SYSTEM : "全局唯一"
+LBPH_MODEL ||--|| SYSTEM : "全局唯一"
+@enduml
