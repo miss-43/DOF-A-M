@@ -4,7 +4,12 @@
         {
             "label": "build",
             "type": "shell",
-            "command": "g++ -g -std=c++17 ${file} -o ${workspaceFolder}/build/${fileBasenameNoExtension} $(pkg-config --cflags --libs opencv4) -lstdc++fs",
+            "command": "g++ -g -std=c++17 ${file} -o ${workspaceFolder}/build/${fileBasenameNoExtension} $(pkg-config --cflags --libs opencv4) -lsqlite3 -lstdc++fs",
+            "options": {
+                "env": {
+                    "PKG_CONFIG_PATH": "/usr/lib/x86_64-linux-gnu/pkgconfig"
+                }
+            },
             "group": {
                 "kind": "build",
                 "isDefault": true
@@ -22,16 +27,42 @@
                 "-g",
                 "${file}",
                 "-o",
-                "${fileDirname}/${fileBasenameNoExtension}"
+                "${fileDirname}/${fileBasenameNoExtension}",
+                "-std=c++17",
+                "$(pkg-config --cflags --libs opencv4)",
+                "-lsqlite3",
+                "-lstdc++fs"
             ],
             "options": {
-                "cwd": "${fileDirname}"
+                "cwd": "${fileDirname}",
+                "env": {
+                    "PKG_CONFIG_PATH": "/usr/lib/x86_64-linux-gnu/pkgconfig"
+                }
             },
             "problemMatcher": [
                 "$gcc"
             ],
             "group": "build",
             "detail": "调试器生成的任务。"
+        },
+        // 新增任务：编译测试脚本（包含所有必要的源文件）
+        {
+            "label": "build-test",
+            "type": "shell",
+            "command": "g++ -g -std=c++17 ${workspaceFolder}/src/business/test_event_driven.cpp ${workspaceFolder}/src/business/app.cpp ${workspaceFolder}/src/business/face_recognition_main.cpp -o ${workspaceFolder}/build/test_event_driven $(pkg-config --cflags --libs opencv4) -lsqlite3 -lstdc++fs",
+            "options": {
+                "env": {
+                    "PKG_CONFIG_PATH": "/usr/lib/x86_64-linux-gnu/pkgconfig"
+                }
+            },
+            "group": {
+                "kind": "build",
+                "isDefault": false
+            },
+            "problemMatcher": [
+                "$gcc"
+            ],
+            "detail": "编译测试脚本，包含所有必要的源文件"
         }
     ]
 }

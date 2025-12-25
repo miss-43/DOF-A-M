@@ -1,4 +1,4 @@
-﻿#include <sqlite3.h>
+#include <sqlite3.h>
 #include <stdio.h>
 
 #include <algorithm>
@@ -7,38 +7,15 @@
 #include <ctime>
 #include <filesystem>
 #include <iostream>
-#include <mutex>
 #include <opencv2/core.hpp>
 #include <opencv2/face.hpp>
-#include <opencv2/highgui.hpp>  // 解决 imshow, waitKey, destroyAllWindows
-#include <opencv2/imgproc.hpp>
-#include <opencv2/objdetect.hpp>
+#include <opencv2/highgui.hpp>    // 解决 imshow, waitKey, destroyAllWindows
+#include <opencv2/imgproc.hpp>    // 解决 cvtColor, equalizeHist, resize
+#include <opencv2/objdetect.hpp>  // 包含 CascadeClassifier
 #include <opencv2/opencv.hpp>
-#include <opencv2/videoio.hpp>
+#include <opencv2/videoio.hpp>  // 解决 VideoCapture, cap.read()
 #include <thread>
 #include <vector>
-
-// 确保目录结构存在
-#define MODEL_DIR "./src/data/models"
-#define DATA_DIR "./src/data"
-
-// 事件类型定义
-enum EVENT_TYPE {
-  EVENT_NONE,
-  EVENT_EXIT,
-  EVENT_SELECT_USER,
-  EVENT_CAPTURE_SAMPLE,
-  EVENT_TRAIN_MODEL,
-  EVENT_TOGGLE_RECOGNITION,
-  EVENT_SHOW_HELP
-};
-
-// 事件结构体
-struct Event {
-  EVENT_TYPE type;
-  int param1;    // 用于传递用户ID等参数
-  void* param2;  // 用于传递指针类型参数
-};
 
 // 错误代码定义
 enum ERROR_CODE {
@@ -48,8 +25,7 @@ enum ERROR_CODE {
   ERROR_TRAINING_FAILED,
   ERROR_RECOGNITION_FAILED,
   ERROR_MODEL_NOT_FOUND,
-  ERROR_UNKNOWN,
-  ERROR_WARNING
+  ERROR_UNKNOWN
 };
 
 // 日志级别定义
@@ -58,9 +34,8 @@ enum LOG_LEVEL { LOG_DEBUG = 0, LOG_INFO, LOG_WARNING, LOG_ERROR };
 // 全局配置常量
 const int DEFAULT_USER_ID = 1;
 const int SAMPLE_SIZE = 100;
-const std::string MODEL_PATH =
-    MODEL_DIR + std::string("/face_recognition_model.yml");
-const std::string DATABASE_PATH = "./src/data/XL_URK_Database.db";
+const std::string MODEL_PATH = "./face_recognition_model.yml";
+const std::string DATABASE_PATH = "./XL_URK_Database.db";
 
 // 全局变量
 cv::VideoCapture cap;
@@ -70,20 +45,14 @@ cv::Ptr<cv::face::LBPHFaceRecognizer> recog;
 // 数据结构
 std::vector<cv::Mat> samples;
 std::vector<int> labels;
-std::vector<std::string> employee_names;
+std::vector<std::string> employee_names = {"user1", "user2", "user3", "user4",
+                                           "user5"};
 
 // 运行状态
 bool is_recognizing = false;
-bool running = true;
 int current_user_id = DEFAULT_USER_ID;
 std::string current_user_name = "user1";
 int sample_count = 0;
-int frame_skip = 0;
-const int FRAME_SKIP_INTERVAL = 5;  // 跳帧策略：每5帧处理一次
-
-// 事件队列相关
-std::vector<Event> event_queue;
-std::mutex event_mutex;
 
 // 统一日志输出
 void log_message(int code, const std::string& message) {
@@ -121,7 +90,8 @@ bool init_database() {
   }
 
   // 查询员工信息
-  const char* sql_employee = "SELECT Employee_ID, Name FROM t_Employees";
+  const char* sql_employee =
+      "SELECT Employee_ID, Employee_Name FROM t_Employee";
   rc = sqlite3_prepare_v2(db, sql_employee, -1, &stmt, NULL);
   if (rc != SQLITE_OK) {
     log_message(ERROR_INIT_FAILED,
@@ -137,30 +107,11 @@ bool init_database() {
     employee_names.push_back(std::string(emp_name));
   }
   sqlite3_finalize(stmt);
-
-  // 查询人脸信息
-  const char* sql_face = "SELECT Face_ID FROM t_Face";
-  rc = sqlite3_prepare_v2(db, sql_face, -1, &stmt, NULL);
-  if (rc != SQLITE_OK) {
-    log_message(ERROR_INIT_FAILED,
-                "查询人脸信息失败: " + std::string(sqlite3_errmsg(db)));
-    sqlite3_close(db);
-    return false;
-  }
-
-  // 读取人脸信息作为labels
-  labels.clear();
-  while (sqlite3_step(stmt) == SQLITE_ROW) {
-    int face_id = sqlite3_column_int(stmt, 0);
-    labels.push_back(face_id);
-  }
-  sqlite3_finalize(stmt);
   sqlite3_close(db);
 
   log_message(ERROR_SUCCESS, "数据库初始化成功，加载了 " +
                                  std::to_string(employee_names.size()) +
-                                 " 个员工信息和 " +
-                                 std::to_string(labels.size()) + " 个人脸数据");
+                                 " 个员工信息");
   return true;
 }
 
@@ -181,7 +132,7 @@ static cv::Rect detect_face(cv::Mat gray, cv::CascadeClassifier cas) {
   cv::Rect face;
   cas.detectMultiScale(gray, faces, 1.1, 3, 0, cv::Size(80, 80));
   if (faces.empty()) return {};
-  face = *std::max_element(
+  face = *max_element(
       faces.begin(), faces.end(),
       [](const cv::Rect& a, const cv::Rect& b) { return a.area() < b.area(); });
   return face;
@@ -215,15 +166,12 @@ cv::Mat process_face_image(cv::Mat face) {
 
   // 调整大小
   cv::resize(equalized, resized, cv::Size(SAMPLE_SIZE, SAMPLE_SIZE));
+
   return resized;
 }
 
 // 初始化人脸识别系统
 bool init_face_recognition() {
-  // 确保目录结构存在
-  std::filesystem::create_directories(MODEL_DIR);
-  std::filesystem::create_directories(DATA_DIR + std::string("/samples"));
-
   // 查找级联文件
   std::string cascade_path = find_cascade();
   if (cascade_path.empty() || !face_cas.load(cascade_path)) {
@@ -234,7 +182,7 @@ bool init_face_recognition() {
   log_message(ERROR_SUCCESS, "级联分类器加载成功: " + cascade_path);
 
   // 初始化人脸识别器
-  recog = cv::face::LBPHFaceRecognizer::create(1, 8, 4, 4, 9.0);
+  recog = cv::face::LBPHFaceRecognizer::create(1, 8, 4, 4, 8.0);
   log_message(ERROR_SUCCESS, "人脸识别器初始化成功");
 
   // 打开视频流
@@ -252,12 +200,7 @@ bool init_face_recognition() {
   log_message(ERROR_SUCCESS, "视频流打开成功");
 
   // 初始化数据库
-  if (!init_database()) {
-    log_message(ERROR_WARNING, "数据库初始化失败，使用默认数据");
-    // 使用默认数据
-    employee_names = {"user1", "user2", "user3", "user4", "user5"};
-    labels = {1, 2, 3, 4, 5};
-  }
+  init_database();
 
   // 尝试加载已训练的模型
   if (std::filesystem::exists(MODEL_PATH)) {
@@ -284,11 +227,6 @@ bool capture_sample() {
     return false;
   }
 
-  // 跳帧策略
-  if (frame_skip++ % FRAME_SKIP_INTERVAL != 0) {
-    return false;
-  }
-
   // 转换为灰度图
   cv::cvtColor(frame, gray, cv::COLOR_BGR2GRAY);
 
@@ -305,23 +243,13 @@ bool capture_sample() {
   // 处理人脸图像
   processed_face = process_face_image(face);
 
-  // 保存样本到文件系统
-  std::string sample_dir =
-      DATA_DIR + std::string("/samples/") + std::to_string(current_user_id);
-  std::filesystem::create_directories(sample_dir);
-
-  std::string sample_filename =
-      sample_dir + "/sample_" + std::to_string(sample_count) + ".png";
-  cv::imwrite(sample_filename, processed_face);
-
-  // 保存样本到内存
+  // 保存样本
   samples.push_back(processed_face);
   labels.push_back(current_user_id);
   sample_count++;
 
   log_message(ERROR_SUCCESS,
-              "样本采集成功，当前样本数: " + std::to_string(sample_count) +
-                  "，保存路径: " + sample_filename);
+              "样本采集成功，当前样本数: " + std::to_string(sample_count));
 
   return true;
 }
@@ -349,12 +277,7 @@ bool train_model() {
 }
 
 // 进行人脸识别
-bool recognize_face(cv::Mat& frame, cv::Mat& gray, int& recognized_id) {
-  // 跳帧策略
-  if (frame_skip++ % FRAME_SKIP_INTERVAL != 0) {
-    return false;
-  }
-
+bool recognize_face(cv::Mat& frame, cv::Mat& gray) {
   cv::Rect face_rect = detect_face(gray, face_cas);
   if (face_rect.empty()) {
     return false;
@@ -375,7 +298,6 @@ bool recognize_face(cv::Mat& frame, cv::Mat& gray, int& recognized_id) {
   // 处理识别结果
   if (confidence < 80) {
     // 识别成功
-    recognized_id = predicted_label;
     std::string result_text;
     if (predicted_label >= 0 && predicted_label < (int)employee_names.size()) {
       result_text = employee_names[predicted_label] + " (" +
@@ -390,7 +312,6 @@ bool recognize_face(cv::Mat& frame, cv::Mat& gray, int& recognized_id) {
     return true;
   } else {
     // 识别失败
-    recognized_id = -1;
     std::string result_text =
         "Unknown (" + std::to_string((int)confidence) + ")";
     cv::putText(frame, result_text, cv::Point(face_rect.x, face_rect.y - 10),
@@ -411,52 +332,6 @@ void show_help() {
             << "  [Esc]   退出\n";
 }
 
-// 发送事件到事件队列
-void send_event(EVENT_TYPE type, int param1 = 0, void* param2 = nullptr) {
-  std::lock_guard<std::mutex> lock(event_mutex);
-  Event event;
-  event.type = type;
-  event.param1 = param1;
-  event.param2 = param2;
-  event_queue.push_back(event);
-}
-
-// 处理事件队列
-void process_events() {
-  std::lock_guard<std::mutex> lock(event_mutex);
-  for (auto& event : event_queue) {
-    switch (event.type) {
-      case EVENT_EXIT:
-        running = false;
-        log_message(ERROR_SUCCESS, "退出程序");
-        break;
-      case EVENT_SELECT_USER:
-        current_user_id = event.param1;
-        current_user_name = "user" + std::to_string(current_user_id);
-        log_message(ERROR_SUCCESS, "当前选择用户: " + current_user_name);
-        break;
-      case EVENT_CAPTURE_SAMPLE:
-        capture_sample();
-        break;
-      case EVENT_TRAIN_MODEL:
-        train_model();
-        break;
-      case EVENT_TOGGLE_RECOGNITION:
-        is_recognizing = !is_recognizing;
-        log_message(
-            ERROR_SUCCESS,
-            "识别模式: " + std::string(is_recognizing ? "开启" : "关闭"));
-        break;
-      case EVENT_SHOW_HELP:
-        show_help();
-        break;
-      default:
-        break;
-    }
-  }
-  event_queue.clear();
-}
-
 // 主函数
 int main(int argc, char** argv) {
   // 初始化人脸识别系统
@@ -470,13 +345,10 @@ int main(int argc, char** argv) {
 
   // 主循环
   cv::Mat frame, gray;
-  running = true;
-  int recognized_id = -1;
-
-  while (running) {
+  while (true) {
     // 读取视频帧
     if (!cap.read(frame) || frame.empty()) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      if ((char)cv::waitKey(1) == 27) break;
       continue;
     }
 
@@ -485,8 +357,7 @@ int main(int argc, char** argv) {
 
     // 如果在识别模式，进行识别
     if (is_recognizing) {
-      recognize_face(frame, gray, recognized_id);
-      // 这里可以将recognized_id传递给LVGL前端
+      recognize_face(frame, gray);
     }
 
     // 显示当前状态
@@ -500,7 +371,7 @@ int main(int argc, char** argv) {
     // 显示图像
     cv::imshow("Face Recognition", frame);
 
-    // 处理键盘输入并转换为事件（保留兼容）
+    // 处理键盘输入
     char key = (char)cv::waitKey(1);
     switch (key) {
       case '1':
@@ -508,30 +379,37 @@ int main(int argc, char** argv) {
       case '3':
       case '4':
       case '5':
-        send_event(EVENT_SELECT_USER, key - '0');
+        current_user_id = key - '0';
+        current_user_name = "user" + std::to_string(current_user_id);
+        log_message(ERROR_SUCCESS, "当前选择用户: " + current_user_name);
         break;
       case 'c':
-        send_event(EVENT_CAPTURE_SAMPLE);
+        // 采集样本
+        capture_sample();
         break;
       case 't':
-        send_event(EVENT_TRAIN_MODEL);
+        // 训练模型
+        train_model();
         break;
       case 'r':
-        send_event(EVENT_TOGGLE_RECOGNITION);
+        // 切换识别模式
+        is_recognizing = !is_recognizing;
+        log_message(ERROR_SUCCESS, std::string("识别模式: ") +
+                                       (is_recognizing ? std::string("开启")
+                                                       : std::string("关闭")));
         break;
       case 'h':
-        send_event(EVENT_SHOW_HELP);
+        // 显示帮助
+        show_help();
         break;
       case 27:  // ESC键退出
-        send_event(EVENT_EXIT);
-        break;
+        log_message(ERROR_SUCCESS, "退出程序");
+        cap.release();
+        cv::destroyAllWindows();
+        return 0;
     }
-
-    // 处理事件队列
-    process_events();
   }
 
-  // 释放资源
   cap.release();
   cv::destroyAllWindows();
   return 0;
